@@ -1,0 +1,125 @@
+// Prisma schema v2 — normalized, indexed, async-ready
+// Run: npx prisma db push
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users ───────────────────────────────────────────────────────────────────
+model User {
+  id            String         @id @default(cuid())
+  name          String?
+  email         String         @unique
+  passwordHash  String
+  createdAt     DateTime       @default(now())
+  scans         Scan[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+// ─── Refresh Tokens (rotate on each use) ─────────────────────────────────────
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─── Scans (async pipeline — status field tracks job progress) ───────────────
+model Scan {
+  id                 String        @id @default(cuid())
+  userId             String?
+  status             String        @default("pending") // pending | processing | completed | failed
+  inputType          String        // screenshot | message | email | url
+  cloudinaryPublicId String?
+  cloudinaryUrl      String?
+  pipelineType       String?       // text_thread | qr | payment_page | email_kyc
+  language           String?       // detected OCR language(s) e.g. "en,hi"
+  rawOcrText         String?       @db.Text
+  extractedText      String?       @db.Text
+  verdict            String?       // SAFE | SUSPICIOUS | SCAM
+  severity           String?       // LOW | MODERATE | SUSPICIOUS | HIGH | CRITICAL
+  riskScore          Int?
+  ruleScore          Int?          // rules engine sub-score
+  llmScore           Int?          // LLM classifier sub-score
+  reasons            Json?         // string[]
+  tactics            Json?         // { name, description, icon, color }[]
+  recommendations    Json?         // string[]
+  urlRisk            String?
+  isPublicShare      Boolean       @default(false)
+  expiresAt          DateTime?     // auto-delete original after this date
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  user               User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  entities           ScanEntity[]
+  feedback           ScanFeedback[]
+
+  @@index([userId, createdAt])
+  @@index([verdict])
+  @@index([status])
+  @@map("scans")
+}
+
+// ─── Scan Entities (normalized — enables aggregate queries on UPI/URL/phone) ──
+model ScanEntity {
+  id     String @id @default(cuid())
+  scanId String
+  type   String // upi | url | phone | domain | email
+  value  String
+  scan   Scan   @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([type, value])
+  @@map("scan_entities")
+}
+
+// ─── Threat Blocklist ─────────────────────────────────────────────────────────
+model ThreatBlocklist {
+  id            String   @id @default(cuid())
+  type          String   // upi | url | domain | phone
+  value         String   @unique
+  reportedCount Int      @default(1)
+  verified      Boolean  @default(false)
+  source        String?  // user_report | virustotal | safe_browsing | manual
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([type, value])
+  @@map("threat_blocklist")
+}
+
+// ─── Community Reports ────────────────────────────────────────────────────────
+model CommunityReport {
+  id        String   @id @default(cuid())
+  userId    String?
+  type      String   // upi | url | phone | domain
+  value     String
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@index([type, value])
+  @@map("community_reports")
+}
+
+// ─── Scan Feedback ────────────────────────────────────────────────────────────
+model ScanFeedback {
+  id                String   @id @default(cuid())
+  scanId            String
+  userMarkedCorrect Boolean
+  notes             String?
+  createdAt         DateTime @default(now())
+  scan              Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@map("scan_feedback")
+}
